@@ -37,6 +37,18 @@ Dopo ogni modifica a `webhook_server.py` o ad altri moduli, il `README.md` DEVE 
 - Tabella integrazioni esterne (se aggiunte nuove API/servizi)
 - Sezione configurazione (se aggiunte nuove variabili .env)
 
+## Git Commit & Push (OBBLIGATORIO)
+
+**REGOLA IMPERATIVA**: Dopo ogni aggiornamento al codice, DEVI fare `git commit` e `git push`. Nessuna eccezione.
+
+Procedura:
+1. `git add` dei file modificati (mai `git add -A`, solo file specifici)
+2. `git commit` con messaggio descrittivo + `Co-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>`
+3. `git push origin main`
+4. Se il push fallisce (non-fast-forward), fare `git pull --rebase origin main` e riprovare
+
+**ATTENZIONE SECRETS**: Non committare mai segreti hardcoded (API keys, tokens). Usare `os.environ.get()` nel codice e `.env` localmente. I file `.plist` locali possono avere i valori reali ma su GitHub devono avere placeholder.
+
 ## Convenzioni
 
 - Lingua log/commenti: italiano
