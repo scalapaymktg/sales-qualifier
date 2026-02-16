@@ -1,0 +1,14 @@
+.env
+*.log
+*.error.log
+__pycache__/
+.claude/
+.vscode/
+screenshots/
+*.zip
+*.pdf
+*.html
+.DS_Store
+credentials.json
+token.json
+backfill_notes.py

@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.scalapay.webhook-server</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/python3</string>
+        <string>/Users/stefano.conforti@scalapay.com/Cursor/sales-qualifier/webhook_server.py</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/stefano.conforti@scalapay.com/Cursor/sales-qualifier</string>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/stefano.conforti@scalapay.com/Cursor/sales-qualifier/webhook.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/stefano.conforti@scalapay.com/Cursor/sales-qualifier/webhook.error.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HUBSPOT_TOKEN</key>
+        <string>YOUR_HUBSPOT_TOKEN</string>
+        <key>SLACK_BOT_TOKEN</key>
+        <string>YOUR_SLACK_BOT_TOKEN</string>
+        <key>SLACK_CHANNEL</key>
+        <string>C0A9K3A9WA3</string>
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+</dict>
+</plist>
