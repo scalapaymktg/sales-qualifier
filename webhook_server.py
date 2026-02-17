@@ -1324,116 +1324,9 @@ def _atoka_extract(company_name: str, vat: str) -> dict:
     return result
 
 
-def _ollama_fallback(company_name: str, domain: str, vat: str) -> dict:
-    """Fallback: scrape search pages and use gemma3:4b to extract revenue data."""
-    import re
-    import urllib.parse
-
-    result = {"fatturato": "N/D", "ragione_sociale": "N/D", "anno_bilancio": "N/D"}
-
-    # Check Ollama availability before scraping (avoid wasting time scraping if LLM is offline)
-    ollama_status = _check_ollama()
-    if not ollama_status["available"] or not ollama_status["model_loaded"]:
-        logger.error(f"[fallback] Ollama non disponibile: {ollama_status['error']}")
-        result["ollama_offline"] = True
-        return result
-
-    search_term = vat if vat and vat != "N/A" else company_name
-    search_term_encoded = urllib.parse.quote(search_term)
-    company_encoded = urllib.parse.quote(company_name)
-
-    scraped_texts = {}
-    sources_urls = {
-        "fatturatoitalia": f"https://www.fatturatoitalia.it/?s={search_term_encoded}",
-        "reportaziende": f"https://www.reportaziende.it/cerca?q={search_term_encoded}",
-        "ufficiocamerale": f"https://www.ufficiocamerale.it/?s={company_encoded}",
-    }
-
-    for source_name, url in sources_urls.items():
-        logger.info(f"[fallback] Scraping {source_name} for: {search_term}")
-        text = _fetch_site_text(url)
-        if text:
-            scraped_texts[source_name] = text
-            logger.info(f"  {source_name}: {len(text)} chars scraped")
-
-    if not scraped_texts:
-        return result
-
-    context_parts = []
-    for source_name, text in scraped_texts.items():
-        context_parts.append(f"--- FONTE: {source_name} ---\n{text[:2000]}")
-    context = "\n\n".join(context_parts)
-
-    vat_instruction = ""
-    if vat and vat != "N/A":
-        vat_instruction = f"""
-IMPORTANTE: Ci sono spesso aziende OMONIME con P.IVA diverse.
-DEVI trovare SOLO l'azienda con P.IVA {vat}.
-Se trovi dati di un'azienda con P.IVA diversa, rispondi N/D."""
-
-    prompt = f"""Sei un analista finanziario. Dai dati seguenti, estratti da siti di bilanci aziendali italiani,
-estrai le informazioni sulla seguente azienda.
-
-AZIENDA CERCATA:
-- Nome: {company_name}
-- Partita IVA: {vat if vat != 'N/A' else 'non disponibile'}
-- Dominio: {domain if domain != 'N/A' else 'non disponibile'}
-{vat_instruction}
-
-DATI ESTRATTI DAI SITI:
-{context}
-
-Rispondi SOLO con questo JSON (nessun altro testo):
-{{
-  "ragione_sociale": "<ragione sociale ufficiale trovata, o 'N/D' se non trovata>",
-  "fatturato": "<fatturato annuo in formato es. '€2,5 mln' o '€150.000' o 'N/D' se non trovato>",
-  "anno_bilancio": "<anno del bilancio trovato, es. '2024' o '2023' o 'N/D'>",
-  "fonte": "<quale dei 3 siti conteneva l'informazione>",
-  "piva_verificata": "<true se hai trovato e verificato la P.IVA {vat}, false o N/D altrimenti>"
-}}"""
-
-    try:
-        ollama_response = requests.post(
-            f"{OLLAMA_BASE_URL}/api/chat",
-            json={
-                "model": OLLAMA_MODEL,
-                "messages": [
-                    {"role": "system", "content": "Sei un analista finanziario esperto. Rispondi sempre in JSON valido."},
-                    {"role": "user", "content": prompt}
-                ],
-                "stream": False
-            },
-            timeout=120
-        )
-
-        if ollama_response.status_code == 200:
-            response_data = ollama_response.json()
-            response_text = response_data.get("message", {}).get("content", "")
-
-            logger.info(f"[fallback] Ollama response: {response_text[:300]}...")
-
-            clean_text = response_text
-            if "```json" in clean_text:
-                clean_text = clean_text.split("```json")[1].split("```")[0]
-            elif "```" in clean_text:
-                clean_text = clean_text.split("```")[1].split("```")[0]
-
-            import json as json_module
-            parsed = json_module.loads(clean_text.strip())
-            result["fatturato"] = parsed.get("fatturato", "N/D")
-            result["ragione_sociale"] = parsed.get("ragione_sociale", "N/D")
-            result["anno_bilancio"] = parsed.get("anno_bilancio", "N/D")
-
-            logger.info(f"[fallback] Extracted: fatturato={result['fatturato']}, ragione_sociale={result['ragione_sociale']}")
-        else:
-            logger.error(f"Ollama API error: {ollama_response.status_code}")
-
-    except requests.exceptions.ConnectionError:
-        logger.error("Ollama not running on localhost:11434 - is 'ollama serve' active?")
-    except Exception as e:
-        logger.warning(f"[fallback] Ollama extraction failed for {company_name}: {e}")
-
-    return result
+# _ollama_fallback REMOVED: was unreliable and returned wrong data (wrong companies/VATs)
+# Fallback to search pages scraping + LLM extraction was causing more harm than good
+# Better to return N/D than wrong data. Keeping _extract_fatturato_from_detail_page for detail pages only.
 
 
 def _parse_fatturato_to_number(fatturato_str: str) -> float:
@@ -1653,28 +1546,9 @@ def search_company_revenue(company_name: str, domain: str = "", vat: str = "",
         diag = atoka_data.get("diagnostica", "Nessun dato trovato")
         result["diagnostics"].append(f"Atoka: {diag}")
 
-    # === STEP 4: Fallback to Ollama gemma3:4b ===
-    # Solo se non abbiamo trovato nulla finora
-    if not all_sources:
-        logger.info(f"Nessun dato da fonti primarie, falling back to Ollama gemma3:4b")
-        fallback = _ollama_fallback(company_name, domain, vat)
-        if fallback.get("ollama_offline"):
-            result["ollama_offline"] = True
-            result["diagnostics"].append("Ollama: offline — LLM non disponibile per estrazione")
-        if fallback["fatturato"] != "N/D":
-            all_sources.append({
-                "source": "ollama_gemma3_4b",
-                "value": fallback["fatturato"],
-                "confidence": "low",  # LLM extraction = confidence basso
-                "validated": False,  # Ollama fallback non validato
-                "raw": f"anno: {fallback.get('anno_bilancio', 'N/D')}" if fallback.get('anno_bilancio', 'N/D') != "N/D" else ""
-            })
-            logger.info(f"Ollama: fatturato={fallback['fatturato']}")
-        else:
-            if not fallback.get("ollama_offline"):
-                result["diagnostics"].append("Ollama: nessun dato trovato nelle fonti web scraping")
-        if fallback["ragione_sociale"] != "N/D" and result["ragione_sociale"] == "N/D":
-            result["ragione_sociale"] = fallback["ragione_sociale"]
+    # === STEP 4: Ollama fallback REMOVED ===
+    # Was unreliable: returned wrong companies/VATs, claimed piva_verificata=true when false
+    # Better to return N/D than wrong data. If no sources found, we skip to validation with empty list.
 
     # === STEP 5: MULTI-SOURCE VALIDATION ===
     if all_sources:
@@ -3930,16 +3804,17 @@ if __name__ == "__main__":
     logger.info(f"Slack Token: {'configured' if SLACK_BOT_TOKEN else 'NOT SET - set SLACK_BOT_TOKEN env var'}")
     logger.info("")
 
-    # Ollama health check at startup
+    # Ollama health check at startup (used for detail page extraction only)
     ollama_status = _check_ollama()
     if ollama_status["available"] and ollama_status["model_loaded"]:
         logger.info(f"Ollama: OK - server attivo, modello {OLLAMA_MODEL} disponibile")
+        logger.info("  (usato solo per estrazione da pagine dettagliate, non per fallback search)")
     elif ollama_status["available"]:
         logger.warning(f"Ollama: PARZIALE - {ollama_status['error']}")
     else:
-        logger.error(f"Ollama: OFFLINE - {ollama_status['error']}")
-        logger.error("  Il fallback fatturato (Pattern D + search pages) non funzionera'.")
-        logger.error("  Per risolvere: ollama serve && ollama pull gemma3:4b")
+        logger.warning(f"Ollama: OFFLINE - {ollama_status['error']}")
+        logger.warning("  Estrazione da pagine dettagliate non disponibile.")
+        logger.warning("  Per abilitare: ollama serve && ollama pull gemma3:4b")
     logger.info("")
 
     # Process pending deals at startup (catch deals missed while offline)

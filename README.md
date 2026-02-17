@@ -26,6 +26,36 @@ Sistema autonomo di qualificazione deal per Scalapay. Riceve webhook da HubSpot 
 
 ## Changelog
 
+### 2026-02-16 - Removal: Ollama fallback eliminato (inaccurato e fuorviante)
+
+**Problema**: Ollama fallback (scraping search pages + gemma3:4b extraction) restituiva sistematicamente dati sbagliati: aziende con P.IVA diverse (es. "Gestore Dei Mercati Energetici" per beauty center), fatturati assurdi (€14.5 miliardi per negozi piccoli), ragioni sociali non correlate.
+
+**Analisi accuratezza**:
+- **20/55 volte** → restituiva `N/D` (inutile)
+- **35/55 volte** → "trovava" un valore, ma **100% SBAGLIATO**:
+  - "Saras S.p.a." (€9.6 miliardi) → ripetuto 17 volte per aziende diverse
+  - "Gestore Dei Mercati Energetici" (€14.5 miliardi) → beauty center e piccole aziende
+  - "Lidl Italia" (€7.1 miliardi) → aziende completamente diverse
+- Campo `piva_verificata: true` **inaffidabile** (diceva true quando restituiva P.IVA sbagliate)
+
+**Causa**: Ollama stava copiando i primi risultati dalle pagine di ricerca (sempre le stesse grandi aziende) e restituendoli come se fossero l'azienda cercata, ignorando l'istruzione di verificare la P.IVA.
+
+**Soluzione**: Rimosso completamente Ollama fallback. Meglio avere **"N/D" onesto** che **dati sbagliati con confidence falsa**. Le fonti primarie (VIES, fatturatoitalia, ufficiocamerale, registroaziende, Atoka) sono sufficienti.
+
+**Modifiche codice**:
+- Rimossa funzione `_ollama_fallback()` (era ~110 righe)
+- Rimossa chiamata in `fetch_revenue_from_various_sources()` (STEP 4)
+- Mantenuto `_check_ollama()` e `_extract_fatturato_from_detail_page()` per estrazione da pagine dettagliate (più affidabile)
+- Aggiornati log di startup per chiarire che Ollama è usato solo per detail pages
+
+**Impatto**:
+- ✅ Eliminati falsi positivi su fatturato (aziende sbagliate)
+- ✅ Più veloce: -30 secondi quando nessuna fonte primaria trova dati
+- ✅ Più onesto: N/D quando non sappiamo, invece di inventare dati
+- ⚠️ Meno deal con fatturato (ma solo quelli che prima avevano dati SBAGLIATI)
+
+---
+
 ### 2026-02-16 - Feature: Nota HubSpot automatica quando utente qualifica deal via Slack
 
 **Problema**: Quando un utente cliccava i pulsanti Slack (🤖 Automated / 👤 Sales) per qualificare un deal, il sistema aggiornava solo la property `sql_qualifier` ma NON creava alcuna nota sul deal in HubSpot. Impossibile tracciare chi, quando e come ha qualificato il deal direttamente su HubSpot.
@@ -339,7 +369,7 @@ Il sistema e' organizzato in 4 livelli con escalation progressiva:
 3. **Status update**: `sql_qualifier_status` → `in_progress`
 4. **Data fetch**: recupera proprietà deal + dati company da HubSpot API
 5. **Analisi parallela** (5 moduli indipendenti):
-   - **Revenue**: VIES → fatturatoitalia.it → ufficiocamerale.it (Tavily + Playwright fallback) → registroaziende.it (Tavily) → Atoka (Tavily) → Ollama gemma3:4b + diagnostica
+   - **Revenue**: VIES → fatturatoitalia.it → ufficiocamerale.it (Tavily + Playwright fallback) → registroaziende.it (Tavily) → Atoka (Tavily) + multi-source validation + diagnostica
    - **Payment stack**: agent-browser 3-step (HP → PDP → Checkout) + HTTP fallback
    - **SEMrush**: rank, keywords, traffico organico/paid
    - **SimilarWeb**: visite mensili (split IT vs Estero con YoY), engagement, fonti traffico, competitor
@@ -375,7 +405,7 @@ Contiene il server Flask, tutta la logica di triage Haiku, revenue detection, pa
 | `get_haiku_usage_stats()` | 2576 | Calcola costi per deal e cumulativi giornalieri (solo Haiku) |
 | `send_haiku_report_to_slack()` | 2647 | Formatta report Slack con Block Kit + pulsanti interattivi |
 | `enhanced_payment_detection()` | 1760 | BNPL detection 3-step con agent-browser + HTTP fallback |
-| `search_company_revenue()` | 1512 | Revenue lookup 6-tier (VIES → fatturatoitalia → ufficiocamerale → registroaziende → Atoka → Ollama) + multi-source validation |
+| `search_company_revenue()` | 1512 | Revenue lookup 5-tier (VIES → fatturatoitalia → ufficiocamerale → registroaziende → Atoka) + multi-source validation |
 | `_validate_multi_source_revenue()` | 332 | Validazione coerenza multi-fonte + confidence downgrade per fonte singola non validata |
 | `_fuzzy_match_company_name()` | 264 | Helper: validazione nome azienda via fuzzy matching (difflib, threshold 60%) |
 | `_find_vat_in_html()` | 300 | Helper: validazione P.IVA nella pagina HTML (pattern matching) |
@@ -596,10 +626,8 @@ Tier 5: Atoka (via DuckDuckGo)
   └─ Estrae ricavi/fatturato da dati strutturati
   └─ Diagnostica: "fatturato trovato su Atoka" o "DDG rate-limited"
 
-Tier 6: Multi-source scraping + Ollama (fallback finale)
-  └─ fatturatoitalia.it search + reportaziende.it + altri
-  └─ Ollama gemma3:4b estrazione da testo combinato
-  └─ Diagnostica: "Ollama offline" o "nessun dato trovato"
+⚠️ Tier 6 (Ollama fallback) RIMOSSO: era inaffidabile (restituiva aziende/P.IVA sbagliate).
+   Se nessuna fonte primaria trova dati → restituisce N/D (meglio che dati sbagliati).
 ```
 
 La diagnostica completa viene mostrata nel report Slack nella sezione Revenue.
@@ -610,7 +638,7 @@ La diagnostica completa viene mostrata nel report Slack nella sezione Revenue.
     "fatturato": "€12.500.000",
     "anno_bilancio": "2024",
     "ragione_sociale": "AZIENDA SRL",
-    "source": "VIES + fatturatoitalia.it",  # o "Atoka", "ollama_gemma3_4b"
+    "source": "VIES + fatturatoitalia.it",  # o "ufficiocamerale.it", "registroaziende.it", "Atoka"
     "diagnostics": [
         "VIES: P.IVA valida, ragione sociale = AZIENDA SRL",
         "fatturatoitalia.it: fatturato trovato (€12.500.000)"
@@ -704,7 +732,7 @@ Pricing Haiku: $0.25 / $1.25 per 1M token (input / output).
 | SEMrush | `api.semrush.com` | Rank, keywords, traffico organico/paid | API key |
 | SimilarWeb | `api.similarweb.com` | Visite (split IT/Estero + YoY), engagement, competitor, fonti traffico | API key |
 | Google Serper | `google.serper.dev` | Risultati ricerca web | API key |
-| Ollama | `localhost:11434` | LLM locale (gemma3:4b) per estrazione dati | Nessuna |
+| Ollama | `localhost:11434` | LLM locale (gemma3:4b) per estrazione da detail pages (fallback search RIMOSSO) | Nessuna |
 | Claude CLI | Binary locale | Haiku per triage (Opus disponibile ma non usato) | Configurazione locale CLI |
 | agent-browser | CLI (Vercel Labs) | Navigazione e-commerce headless | Nessuna |
 | Wappalyzer | Libreria Python (`wappalyzer-next`) | Technology detection: identifica CMS, payment, analytics, framework | Nessuna (open source) |
@@ -722,7 +750,9 @@ Comandi usati:
 
 ### Ollama
 
-LLM locale per estrazione revenue quando i pattern regex falliscono. Modello: `gemma3:4b` (leggero, 4B parametri). Usato come fallback economico (costo zero) prima di invocare Claude.
+LLM locale per estrazione revenue da **pagine dettagliate specifiche** dell'azienda (più affidabili). Modello: `gemma3:4b` (leggero, 4B parametri).
+
+⚠️ **Fallback search pages RIMOSSO**: l'estrazione da pagine di ricerca generiche (fatturatoitalia, reportaziende) è stata rimossa perché restituiva sistematicamente dati sbagliati (aziende diverse, P.IVA errate). Mantenuto solo per detail pages dove il contesto è più affidabile.
 
 ---
 
@@ -990,7 +1020,7 @@ Siti protetti da Cloudflare, Akamai o bot protection avanzata non possono essere
 Il click di agent-browser ha un timeout hardcoded di 10 secondi (Playwright `waitForNavigation`). Per azioni AJAX che non generano navigazione (es. "Aggiungi al carrello"), il timeout scatta sempre. Risolto con JS eval, ma e' un workaround.
 
 ### Revenue detection Italia-centrica
-La ricerca fatturato e' ottimizzata per aziende italiane (fatturatoitalia.it, reportaziende.it, ufficiocamerale.it). Per aziende non italiane, il sistema salta automaticamente le fonti italiane (validazione geografica VAT) e dipende solo da VIES + Ollama fallback con accuracy ridotta.
+La ricerca fatturato e' ottimizzata per aziende italiane (fatturatoitalia.it, ufficiocamerale.it, registroaziende.it, Atoka). Per aziende non italiane, il sistema salta automaticamente le fonti italiane (validazione geografica VAT) e dipende solo da VIES, quindi accuracy ridotta (spesso N/D).
 
 ### Payment detection falsi positivi
 La detection BNPL cerca keyword (es. "scalapay", "afterpay") nel HTML e nell'accessibility tree. Questo puo' generare falsi positivi se:
