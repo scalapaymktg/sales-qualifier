@@ -3322,6 +3322,15 @@ def get_wappalyzer_tech(domain: str) -> str:
 
 def trigger_agent(deal_id: str, deal_name: str, domain: str, company_name: str, vat: str = "N/A", product_request: str = "N/A", category: str = "N/A", store_type: str = "N/A", online_annual_revenue: str = "", offline_annual_revenue: str = ""):
     """Trigger the Claude agent for a specific deal."""
+
+    # === EARLY DEDUP: blocca subito se deal già in lavorazione/inviato ===
+    if deal_id in slack_message_sent:
+        logger.warning(f"⚠️ Deal {deal_id} ({deal_name}) già in lavorazione o inviato, skip completo")
+        return True
+
+    # Segna IMMEDIATAMENTE come in lavorazione per prevenire race condition
+    # (webhook + pending checker possono triggerare quasi simultaneamente)
+    slack_message_sent[deal_id] = "processing"
     logger.info(f"Triggering Claude agent for deal: {deal_name}")
 
     # Set status to in_progress
@@ -3375,26 +3384,20 @@ def trigger_agent(deal_id: str, deal_name: str, domain: str, company_name: str, 
         # Send Haiku report to Slack (de-duplicated)
         logger.info(f"✅ Haiku triage complete (score={triage['score']}, reason={triage['reason']})")
 
-        # Check if Slack message already sent for this deal
-        if deal_id in slack_message_sent:
-            logger.warning(f"⚠️ Slack message già inviato per deal {deal_id} ({deal_name}), skip duplicato")
-            slack_ok = True  # Considera come successo per non andare in failed
-        else:
-            # First time processing this deal - send Slack message
-            slack_ok = send_haiku_report_to_slack(
-                triage, deal_name, deal_id, domain,
-                product_request=product_request, vat=vat,
-                category_hs=category, store_type=store_type,
-                semrush_data=semrush_data, similarweb_data=similarweb_data,
-                wappalyzer_data=wappalyzer_data,
-                online_annual_revenue=online_annual_revenue,
-                offline_annual_revenue=offline_annual_revenue
-            )
+        # Send Slack message (dedup già garantita dall'early check all'inizio di trigger_agent)
+        slack_ok = send_haiku_report_to_slack(
+            triage, deal_name, deal_id, domain,
+            product_request=product_request, vat=vat,
+            category_hs=category, store_type=store_type,
+            semrush_data=semrush_data, similarweb_data=similarweb_data,
+            wappalyzer_data=wappalyzer_data,
+            online_annual_revenue=online_annual_revenue,
+            offline_annual_revenue=offline_annual_revenue
+        )
 
-            # Mark as sent (even if send failed, to avoid retry loops)
-            if slack_ok:
-                slack_message_sent[deal_id] = True
-                logger.info(f"✅ Slack message sent and tracked for deal {deal_id}")
+        # Aggiorna tracking: da "processing" a True (sent)
+        slack_message_sent[deal_id] = True
+        logger.info(f"✅ Slack message sent and tracked for deal {deal_id}")
 
         # Set status to done or failed based on Slack send result
         if deal_id and not deal_id.startswith("test"):
