@@ -77,9 +77,36 @@ TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY", "").strip()
 # WebSearchAPI fallback (generous free plan)
 WEBSEARCH_API_KEY = os.environ.get("WEBSEARCH_API_KEY", "").strip()
 
-# De-duplication: track deal IDs that already received a Slack message
-# Key: deal_id, Value: True (message sent)
-slack_message_sent = {}
+# De-duplication: track deal IDs che hanno già ricevuto messaggio Slack
+# Persistente su file per sopravvivere ai restart del server
+# Key: deal_id, Value: True (message sent) o "processing" (in lavorazione)
+import threading
+_dedup_lock = threading.Lock()
+_DEDUP_FILE = os.path.join(SCRIPT_DIR, ".slack_sent_deals.json")
+
+def _load_dedup_state() -> dict:
+    """Carica stato dedup da file. Ritorna dict vuoto se file non esiste."""
+    try:
+        if os.path.exists(_DEDUP_FILE):
+            with open(_DEDUP_FILE, "r") as f:
+                import json as _json
+                data = _json.load(f)
+                # Rimuovi entries "processing" (server crashato prima di completare)
+                return {k: v for k, v in data.items() if v is True}
+    except Exception:
+        pass
+    return {}
+
+def _save_dedup_state(state: dict):
+    """Salva stato dedup su file."""
+    try:
+        with open(_DEDUP_FILE, "w") as f:
+            import json as _json
+            _json.dump(state, f)
+    except Exception:
+        pass
+
+slack_message_sent = _load_dedup_state()
 
 
 def _check_ollama() -> dict:
@@ -3323,14 +3350,14 @@ def get_wappalyzer_tech(domain: str) -> str:
 def trigger_agent(deal_id: str, deal_name: str, domain: str, company_name: str, vat: str = "N/A", product_request: str = "N/A", category: str = "N/A", store_type: str = "N/A", online_annual_revenue: str = "", offline_annual_revenue: str = ""):
     """Trigger the Claude agent for a specific deal."""
 
-    # === EARLY DEDUP: blocca subito se deal già in lavorazione/inviato ===
-    if deal_id in slack_message_sent:
-        logger.warning(f"⚠️ Deal {deal_id} ({deal_name}) già in lavorazione o inviato, skip completo")
-        return True
-
-    # Segna IMMEDIATAMENTE come in lavorazione per prevenire race condition
-    # (webhook + pending checker possono triggerare quasi simultaneamente)
-    slack_message_sent[deal_id] = "processing"
+    # === EARLY DEDUP ATOMICO: lock + check + set in un'unica operazione ===
+    with _dedup_lock:
+        if deal_id in slack_message_sent:
+            logger.warning(f"⚠️ Deal {deal_id} ({deal_name}) già in lavorazione o inviato, skip completo")
+            return True
+        # Segna IMMEDIATAMENTE come in lavorazione (atomico con il check)
+        slack_message_sent[deal_id] = "processing"
+        _save_dedup_state(slack_message_sent)
     logger.info(f"Triggering Claude agent for deal: {deal_name}")
 
     # Set status to in_progress
@@ -3395,8 +3422,10 @@ def trigger_agent(deal_id: str, deal_name: str, domain: str, company_name: str, 
             offline_annual_revenue=offline_annual_revenue
         )
 
-        # Aggiorna tracking: da "processing" a True (sent)
-        slack_message_sent[deal_id] = True
+        # Aggiorna tracking: da "processing" a True (sent) + persisti su file
+        with _dedup_lock:
+            slack_message_sent[deal_id] = True
+            _save_dedup_state(slack_message_sent)
         logger.info(f"✅ Slack message sent and tracked for deal {deal_id}")
 
         # Set status to done or failed based on Slack send result
@@ -3417,26 +3446,26 @@ def trigger_agent(deal_id: str, deal_name: str, domain: str, company_name: str, 
 
 def process_pending_deals():
     """
-    Search HubSpot for deals with sql_qualifier_status = to_start, in_progress, or failed and process them.
+    Search HubSpot for deals with sql_qualifier_status = to_start or failed and process them.
     Called at server startup and every 10 minutes to catch deals missed while offline.
     - to_start: deals waiting to be processed
-    - in_progress: deals interrupted (server crash, etc.)
     - failed: deals to retry
+    NOTE: NON cerca 'in_progress' per evitare di riprocessare deal che un'altra istanza
+    sta già gestendo. I deal stuck in 'in_progress' verranno gestiti manualmente.
     """
-    logger.info("[pending] Checking for deals with sql_qualifier_status = to_start/in_progress/failed...")
+    logger.info("[pending] Checking for deals with sql_qualifier_status = to_start/failed...")
     try:
         url = f"{HUBSPOT_BASE_URL}/crm/v3/objects/deals/search"
         headers = {
             "Authorization": f"Bearer {HUBSPOT_TOKEN}",
             "Content-Type": "application/json"
         }
-        # HubSpot search: use IN operator for multiple values
         payload = {
             "filterGroups": [{
                 "filters": [{
                     "propertyName": "sql_qualifier_status",
                     "operator": "IN",
-                    "values": ["to_start", "in_progress", "failed"]
+                    "values": ["to_start", "failed"]
                 }]
             }],
             "properties": ["dealname", "sql_qualifier_status"],
@@ -3458,6 +3487,13 @@ def process_pending_deals():
             deal_id = deal.get("id")
             deal_name = deal.get("properties", {}).get("dealname", "Unknown")
             deal_status = deal.get("properties", {}).get("sql_qualifier_status", "unknown")
+
+            # Skip deal con status non valido (eventual consistency dell'indice HubSpot
+            # puo' ritornare deal con status gia' aggiornato a done/in_progress)
+            if deal_status not in ("to_start", "failed"):
+                logger.info(f"[pending] Skip {deal_name} ({deal_id}) - status attuale: {deal_status} (non to_start/failed)")
+                continue
+
             logger.info(f"[pending] Processing: {deal_name} ({deal_id}) - status: {deal_status}")
 
             deal_info = get_deal_info(deal_id)
@@ -3799,7 +3835,7 @@ if __name__ == "__main__":
     logger.info(f"  POST /webhook/hubspot         - HubSpot webhook receiver")
     logger.info(f"  POST /webhook/test            - Manual trigger (runs Claude)")
     logger.info(f"  GET  /webhook/test-slack      - Test Slack integration")
-    logger.info(f"  GET  /webhook/process-pending - Process all pending deals (to_start/in_progress/failed)")
+    logger.info(f"  GET  /webhook/process-pending - Process all pending deals (to_start/failed)")
     logger.info(f"  POST /slack/interactions      - Slack button handler")
     logger.info(f"  GET  /health                  - Health check")
     logger.info("")
@@ -3821,7 +3857,8 @@ if __name__ == "__main__":
     logger.info("")
 
     # Process pending deals at startup (catch deals missed while offline)
-    logger.info("Checking for pending deals (sql_qualifier_status = to_start/in_progress/failed)...")
+    logger.info(f"Dedup state caricato: {len(slack_message_sent)} deal già processati")
+    logger.info("Checking for pending deals (sql_qualifier_status = to_start/failed)...")
     process_pending_deals()
 
     # Start background scheduler for periodic checks

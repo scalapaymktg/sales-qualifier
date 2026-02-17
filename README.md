@@ -26,6 +26,34 @@ Sistema autonomo di qualificazione deal per Scalapay. Riceve webhook da HubSpot 
 
 ## Changelog
 
+### 2026-02-17 - Critical Fix: Infinite loop Slack messages (deal 472789463251)
+
+**Problema**: Deal 472789463251 (ALOHA viaggi e turismo) ha ricevuto **34 messaggi Slack identici** in un loop infinito ogni ~15 secondi.
+
+**Root cause**: Combinazione di 3 bug:
+1. **Server restart loop**: `process_pending_deals()` allo startup processava il deal, poi `app.run()` crashava (porta 5001 occupata da istanza precedente). LaunchAgent (KeepAlive=true) riavviava il server, `slack_message_sent` (dict in-memory) veniva azzerato, e il deal veniva riprocessato.
+2. **HubSpot search eventual consistency**: La query per `to_start/in_progress/failed` ritornava deal con status `done` perché l'indice di ricerca HubSpot non si aggiornava in tempo reale. Lo status nel risultato era `done` ma il deal era incluso nei risultati.
+3. **Dedup non persistente e non thread-safe**: `slack_message_sent` era un semplice `dict` Python senza lock threading e senza persistenza su disco.
+
+**Soluzione (4 fix)**:
+1. **Dedup persistente su file** (`.slack_sent_deals.json`): stato salvato su disco, sopravvive ai restart
+2. **Threading Lock** (`_dedup_lock`): check-then-set atomico, elimina race condition TOCTOU
+3. **Rimosso `in_progress` dalla query**: `process_pending_deals()` cerca solo `to_start`/`failed`
+4. **Validazione status**: skip deal il cui status attuale (dal risultato API) non è `to_start`/`failed`
+
+**Modifiche codice**:
+- `webhook_server.py`: Aggiunta `_load_dedup_state()`, `_save_dedup_state()`, `_dedup_lock` (threading.Lock)
+- `webhook_server.py`: `trigger_agent()` usa `with _dedup_lock:` per check+set atomico
+- `webhook_server.py`: `process_pending_deals()` query solo `to_start`/`failed`, skip deals con status diverso
+- Nuovo file `.slack_sent_deals.json` (in .gitignore) per persistenza dedup
+
+**Impatto**:
+- ✅ Impossibile loop infinito da restart server (stato dedup persistente)
+- ✅ Impossibile race condition webhook/scheduler (lock atomico)
+- ✅ Impossibile riprocessare deal `done`/`in_progress` via eventual consistency (doppio check)
+
+---
+
 ### 2026-02-16 - Removal: Ollama fallback eliminato (inaccurato e fuorviante)
 
 **Problema**: Ollama fallback (scraping search pages + gemma3:4b extraction) restituiva sistematicamente dati sbagliati: aziende con P.IVA diverse (es. "Gestore Dei Mercati Energetici" per beauty center), fatturati assurdi (€14.5 miliardi per negozi piccoli), ragioni sociali non correlate.

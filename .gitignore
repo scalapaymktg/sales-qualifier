@@ -9,6 +9,7 @@ screenshots/
 *.pdf
 *.html
 .DS_Store
+.slack_sent_deals.json
 credentials.json
 token.json
 backfill_notes.py
