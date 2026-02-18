@@ -3441,6 +3441,10 @@ def trigger_agent(deal_id: str, deal_name: str, domain: str, company_name: str, 
         # Set status to failed
         if deal_id and not deal_id.startswith("test"):
             update_hubspot_deal_property(deal_id, "sql_qualifier_status", "failed")
+        # Rimuovi da dedup per permettere retry al prossimo ciclo scheduler
+        with _dedup_lock:
+            slack_message_sent.pop(deal_id, None)
+            _save_dedup_state(slack_message_sent)
         return False
 
 

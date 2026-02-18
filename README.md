@@ -51,6 +51,7 @@ Sistema autonomo di qualificazione deal per Scalapay. Riceve webhook da HubSpot 
 - ✅ Impossibile loop infinito da restart server (stato dedup persistente)
 - ✅ Impossibile race condition webhook/scheduler (lock atomico)
 - ✅ Impossibile riprocessare deal `done`/`in_progress` via eventual consistency (doppio check)
+- ✅ Deal falliti con eccezione vengono rimossi dal dedup e ritentati dallo scheduler
 
 ---
 
