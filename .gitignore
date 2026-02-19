@@ -10,6 +10,7 @@ screenshots/
 *.html
 .DS_Store
 .slack_sent_deals.json
+.webhook_server.lock
 credentials.json
 token.json
 backfill_notes.py

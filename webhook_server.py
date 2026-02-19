@@ -3831,6 +3831,22 @@ def _start_pending_scheduler():
 
 
 if __name__ == "__main__":
+    # === FILE LOCK: impedisce processi multipli ===
+    # Il LaunchAgent con KeepAlive spawna nuovi processi se il precedente crasha.
+    # Senza lock, ogni processo esegue process_pending_deals() prima di app.run(),
+    # causando doppi Slack perche' ogni processo ha il proprio slack_message_sent in memoria.
+    import fcntl
+    _lock_file_path = os.path.join(SCRIPT_DIR, ".webhook_server.lock")
+    _lock_file = open(_lock_file_path, "w")
+    try:
+        fcntl.flock(_lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        _lock_file.write(str(os.getpid()))
+        _lock_file.flush()
+    except BlockingIOError:
+        print(f"Un'altra istanza del server e' gia' in esecuzione (lock file: {_lock_file_path}). Uscita.")
+        import sys
+        sys.exit(0)
+
     port = int(os.environ.get("PORT", 5001))
     logger.info(f"Starting webhook server on port {port}")
     logger.info(f"Agent script: {AGENT_SCRIPT}")

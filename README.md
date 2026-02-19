@@ -26,6 +26,32 @@ Sistema autonomo di qualificazione deal per Scalapay. Riceve webhook da HubSpot 
 
 ## Changelog
 
+### 2026-02-19 - Fix: doppio Slack da processi multipli (deal 474262748397, 474477358275)
+
+**Problema**: Deal ricevevano **2 messaggi Slack identici** nonostante dedup atomico con threading.Lock.
+
+**Root cause**: Il LaunchAgent con `KeepAlive: true` spawnava nuovi processi ogni ~10 secondi (5 startup tra 11:44:03 e 11:44:55). Ogni processo:
+1. Caricava `slack_message_sent` da file (senza il deal nuovo)
+2. Eseguiva `process_pending_deals()` **prima** di `app.run()`
+3. Trovava il deal ancora `to_start` (eventual consistency HubSpot)
+4. Chiamava `trigger_agent()` con il proprio dict dedup in memoria
+5. Crashava su `app.run()` ("Address already in use") ma `trigger_agent()` era gia' partito
+
+Il `threading.Lock()` protegge solo all'interno dello stesso processo, non cross-process.
+
+**Soluzione**: Aggiunto **file lock** (`fcntl.flock`) all'inizio di `__main__`. Un processo che non riesce ad acquisire il lock esce immediatamente con `sys.exit(0)`, senza eseguire `process_pending_deals()` ne' alcun altro codice.
+
+**Modifiche codice**:
+- `webhook_server.py`: Aggiunto `fcntl.flock(LOCK_EX | LOCK_NB)` come prima istruzione in `__main__`
+- `.gitignore`: Aggiunto `.webhook_server.lock`
+
+**Impatto**:
+- ✅ Impossibile che processi multipli eseguano `process_pending_deals()` contemporaneamente
+- ✅ Seconda istanza esce subito con messaggio chiaro ("Un'altra istanza gia' in esecuzione")
+- ✅ Lock rilasciato automaticamente quando il processo termina (OS-level)
+
+---
+
 ### 2026-02-17 - Critical Fix: Infinite loop Slack messages (deal 472789463251)
 
 **Problema**: Deal 472789463251 (ALOHA viaggi e turismo) ha ricevuto **34 messaggi Slack identici** in un loop infinito ogni ~15 secondi.
