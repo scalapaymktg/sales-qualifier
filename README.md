@@ -26,6 +26,23 @@ Sistema autonomo di qualificazione deal per Scalapay. Riceve webhook da HubSpot 
 
 ## Changelog
 
+### 2026-02-19 - Fix: fatturato fantasma da singola fonte medium confidence (deal 474477358275)
+
+**Problema**: Deal PRO GYM mostrava fatturato € 1.345.043.078 (1.3 MILIARDI) nonostante tutte le fonti riportassero "fatturato non estratto". Haiku assegnava 10/10 basandosi su dato inesistente.
+
+**Root cause**: Pattern C di `_fatturatoitalia_extract()` (generic sweep regex) catturava numeri random vicino alla parola "fatturato" nella pagina HTML, anche quando la pagina non conteneva il fatturato dell'azienda. `_validate_multi_source_revenue()` accettava quel valore singolo con confidence "medium" senza contestarlo.
+
+**Soluzione**: In `_validate_multi_source_revenue()`, se c'e' una sola fonte con confidence "medium", il valore viene scartato e si ritorna N/D. Solo fonti con confidence "high" (pattern specifici, dati strutturati) vengono accettate come singola fonte.
+
+**Modifiche codice**:
+- `webhook_server.py`: `_validate_multi_source_revenue()` scarta singola fonte medium confidence
+
+**Impatto**:
+- ✅ Niente piu' fatturati fantasma da generic sweep regex
+- ✅ Score Haiku non piu' gonfiato da dati inesistenti
+
+---
+
 ### 2026-02-19 - Fix: doppio Slack da processi multipli (deal 474262748397, 474477358275)
 
 **Problema**: Deal ricevevano **2 messaggi Slack identici** nonostante dedup atomico con threading.Lock.

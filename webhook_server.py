@@ -416,6 +416,17 @@ def _validate_multi_source_revenue(sources: list, hubspot_online: str = "", hubs
         final_conf = single_source["confidence"]
         validation_note = "Valore da singola fonte - non validabile con altre fonti"
 
+        # REJECT: Se fonte unica con confidence "medium" (es. Pattern C fatturatoitalia generic sweep),
+        # il valore NON e' affidabile - probabilmente estratto da contesto generico della pagina
+        if final_conf == "medium":
+            logger.warning(f"[validation] Scartato valore da singola fonte '{single_source['source']}' con confidence medium: {single_source['value']}")
+            return {
+                "best_value": "N/D",
+                "best_source": "",
+                "final_confidence": "N/D",
+                "validation_notes": [f"Valore {single_source['value']} scartato - singola fonte con confidence medium non affidabile"]
+            }
+
         # CONFIDENCE DOWNGRADE: Se fonte unica + high confidence + non validata -> downgrade a low
         is_validated = sources[0].get("validated", False)  # Controlla flag validated dalla fonte originale
         if final_conf == "high" and not is_validated:
