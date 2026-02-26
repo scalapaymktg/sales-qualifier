@@ -416,16 +416,11 @@ def _validate_multi_source_revenue(sources: list, hubspot_online: str = "", hubs
         final_conf = single_source["confidence"]
         validation_note = "Valore da singola fonte - non validabile con altre fonti"
 
-        # REJECT: Se fonte unica con confidence "medium" (es. Pattern C fatturatoitalia generic sweep),
-        # il valore NON e' affidabile - probabilmente estratto da contesto generico della pagina
+        # KEEP con WARNING: Se fonte unica con confidence "medium", teniamo il valore
+        # ma segnaliamo che non e' validato da altre fonti
         if final_conf == "medium":
-            logger.warning(f"[validation] Scartato valore da singola fonte '{single_source['source']}' con confidence medium: {single_source['value']}")
-            return {
-                "best_value": "N/D",
-                "best_source": "",
-                "final_confidence": "N/D",
-                "validation_notes": [f"Valore {single_source['value']} scartato - singola fonte con confidence medium non affidabile"]
-            }
+            logger.warning(f"[validation] Singola fonte '{single_source['source']}' con confidence medium: {single_source['value']} - tenuto con warning")
+            validation_note = "⚠️ Valore da singola fonte con confidence medium - non validabile con altre fonti"
 
         # CONFIDENCE DOWNGRADE: Se fonte unica + high confidence + non validata -> downgrade a low
         is_validated = sources[0].get("validated", False)  # Controlla flag validated dalla fonte originale
@@ -2310,6 +2305,7 @@ def triage_with_haiku(deal_name: str, domain: str, semrush_data: str, similarweb
         "revenue_raw": revenue_data.get("raw", ""),
         "revenue_diagnostics": revenue_data.get("diagnostics", []),
         "revenue_confidence": revenue_data.get("confidence", "N/D"),  # Confidence del fatturato
+        "revenue_source": revenue_data.get("source", ""),
         "aov_estimated": "N/D",
         "payment_providers": payment_data["providers"],
         "bnpl_providers": payment_data["bnpl_providers"],
@@ -2465,6 +2461,7 @@ Rispondi SOLO con questo JSON (nessun altro testo):
             "revenue_raw": revenue_data.get("raw", ""),
             "revenue_diagnostics": revenue_data.get("diagnostics", []),
             "revenue_confidence": revenue_data.get("confidence", "N/D"),  # Confidence del fatturato
+            "revenue_source": revenue_data.get("source", ""),
             "ollama_offline": ollama_was_offline,
             "payment_providers": payment_data["providers"],
             "bnpl_providers": payment_data["bnpl_providers"],
@@ -2576,8 +2573,15 @@ def send_haiku_report_to_slack(triage: dict, deal_name: str, deal_id: str, domai
 
     # === Extract triage data ===
     score = triage.get("score", 0)
-    stars = ":star:" * score + ":white_circle:" * (10 - score)
+    reason = triage.get("reason", "")
+    triage_failed = reason == "triage_failed"
+    if triage_failed:
+        stars = ":warning:" * 3 + " TRIAGE FALLITO"
+    else:
+        stars = ":star:" * score + ":white_circle:" * (10 - score)
     summary = triage.get("summary", "N/A")
+    if triage_failed and not summary:
+        summary = "⚠️ Il triage LLM è fallito (timeout/errore). Lo score 0 NON è reale - riprovare."
     is_ecommerce = ":white_check_mark:" if triage.get("is_ecommerce") else ":x:"
 
     # Deal info from HubSpot
@@ -2613,6 +2617,7 @@ def send_haiku_report_to_slack(triage: dict, deal_name: str, deal_id: str, domai
             fatturato = f"N/D | Confidence: {revenue_confidence}"
 
     revenue_raw = triage.get("revenue_raw", "")
+    revenue_source = triage.get("revenue_source", "")
     revenue_diagnostics = triage.get("revenue_diagnostics", [])
     # Extract anno from raw string (format: "anno: 2023, utile/perdita: ...")
     anno = "N/D"
@@ -2696,7 +2701,8 @@ def send_haiku_report_to_slack(triage: dict, deal_name: str, deal_id: str, domai
                     f":moneybag: *Revenue*\n"
                     f"• *Fatturato:* {fatturato}\n"
                     f"• *Anno:* {anno}\n"
-                    f"• *AOV Stimato:* {aov_estimated}"
+                    f"• *AOV Stimato:* {aov_estimated}\n"
+                    f"• *Fonte:* {revenue_source if revenue_source else 'N/D'}"
                     + (("\n:mag: *Diagnostica ricerca:*\n" + "\n".join(f"  → _{d}_" for d in revenue_diagnostics)) if revenue_diagnostics else "")
                 )
             }

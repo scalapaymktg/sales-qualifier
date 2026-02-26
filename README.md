@@ -26,6 +26,26 @@ Sistema autonomo di qualificazione deal per Scalapay. Riceve webhook da HubSpot 
 
 ## Changelog
 
+### 2026-02-26 - Fix: 3 bug scoring e revenue display
+
+**Problema 1**: E-commerce con Shopify, Stripe e fatturato €2.4M riceveva score 0/10 perché il fatturato da singola fonte medium-confidence veniva scartato completamente (restituito N/D).
+
+**Problema 2**: La fonte del fatturato (es. fatturatoitalia.it, registroaziende.it) non veniva mostrata nel messaggio Slack, rendendo impossibile verificare l'origine del dato.
+
+**Problema 3**: Quando il triage LLM falliva (timeout/errore JSON), lo score 0 veniva mostrato come se fosse un risultato reale, senza alcun avviso.
+
+**Soluzioni**:
+1. `_validate_multi_source_revenue()`: singola fonte medium non viene più scartata, viene tenuta con warning "⚠️ non validabile con altre fonti"
+2. `triage_with_haiku()`: aggiunto `revenue_source` al dict triage (sia nel return che nel default_result)
+3. `send_haiku_report_to_slack()`: aggiunta riga "Fonte" nel blocco Revenue + warning visivo quando `reason = "triage_failed"`
+
+**Impatto**:
+- ✅ E-commerce con fatturato reale da singola fonte non vengono più penalizzati
+- ✅ Fonte del fatturato visibile in Slack per verifica manuale
+- ✅ Triage fallito chiaramente segnalato (non confondibile con score reale 0)
+
+---
+
 ### 2026-02-19 - Fix: fatturato fantasma da singola fonte medium confidence (deal 474477358275)
 
 **Problema**: Deal PRO GYM mostrava fatturato € 1.345.043.078 (1.3 MILIARDI) nonostante tutte le fonti riportassero "fatturato non estratto". Haiku assegnava 10/10 basandosi su dato inesistente.
