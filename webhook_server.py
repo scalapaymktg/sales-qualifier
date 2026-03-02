@@ -2678,20 +2678,6 @@ def send_haiku_report_to_slack(triage: dict, deal_name: str, deal_id: str, domai
                 )
             }
         },
-        # --- HAIKU TRIAGE ---
-        {
-            "type": "section",
-            "text": {
-                "type": "mrkdwn",
-                "text": (
-                    f":brain: *Haiku Triage*\n"
-                    f"Score: {stars} ({score}/10)\n"
-                    f"E-commerce: {is_ecommerce}\n"
-                    f"{summary}"
-                )
-            }
-        },
-        {"type": "divider"},
         # --- REVENUE ---
         {
             "type": "section",
