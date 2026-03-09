@@ -25,6 +25,24 @@ Sistema autonomo di qualificazione deal per Scalapay. Riceve webhook da HubSpot 
 
 ## Changelog
 
+### 2026-03-09 - Add: Cloudflare Worker proxy per Slack interactions
+
+**Problema**: Se ngrok era down, i bottoni Slack (Automated/Sales) non funzionavano e sales non riceveva alcun feedback. Il click andava perso silenziosamente.
+
+**Soluzione**: Aggiunto Cloudflare Worker (`sales-qualifier-proxy.scalapay.workers.dev`) come proxy tra Slack e il server locale. L'Interactivity URL di Slack ora punta al Worker (URL stabile, sempre online), che forwarda le richieste a ngrok. Se ngrok e' down, il Worker posta un messaggio di alert sul canale Slack.
+
+**File aggiunti**:
+- `worker/src/index.ts` — Cloudflare Worker (proxy + alert Slack)
+- `worker/wrangler.toml` — Configurazione Worker
+- `worker/package.json`, `worker/tsconfig.json` — Dipendenze e build
+
+**Impatto**:
+- L'URL Interactivity di Slack non cambia piu' quando ngrok riavvia
+- Sales riceve sempre feedback: o il bottone funziona, o vede "Server offline"
+- Deploy: `cd worker && npx wrangler deploy`
+
+---
+
 ### 2026-02-26 - Fix: 3 bug scoring e revenue display
 
 **Problema 1**: E-commerce con Shopify, Stripe e fatturato €2.4M riceveva score 0/10 perché il fatturato da singola fonte medium-confidence veniva scartato completamente (restituito N/D).
@@ -902,7 +920,7 @@ SLACK_BOT_TOKEN="xoxb-xxx" python3 webhook_server.py
 ngrok http 5001
 
 # Configurare HubSpot webhook URL: https://<ngrok-id>.ngrok.io/webhook/hubspot
-# Configurare Slack interactivity URL: https://<ngrok-id>.ngrok.io/slack/interactions
+# Slack interactivity URL: https://sales-qualifier-proxy.scalapay.workers.dev/slack/interactions (fisso, via Worker)
 ```
 
 ### Avvio automatico al boot (macOS LaunchAgent)
@@ -1030,10 +1048,16 @@ sales-qualifier/
 ├── server.log                 # Log generico
 ├── usage.log                  # Tracking token/costi
 │
+├── worker/                    # Cloudflare Worker proxy Slack interactions
+│   ├── src/index.ts           # Worker: forward a ngrok + alert se offline
+│   ├── wrangler.toml          # Config Worker (NGROK_URL)
+│   ├── package.json           # Dipendenze npm
+│   └── tsconfig.json          # Config TypeScript
+│
 └── screenshots/               # Screenshot agent-browser
 ```
 
-**Totale codebase: ~5617 righe** (5 moduli Python + 5 shell script + 2 LaunchAgent plist)
+**Totale codebase: ~5617 righe** (5 moduli Python + 5 shell script + 2 LaunchAgent plist + 1 Cloudflare Worker)
 
 ---
 
