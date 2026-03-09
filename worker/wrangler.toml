@@ -1,0 +1,11 @@
+name = "sales-qualifier-proxy"
+main = "src/index.ts"
+compatibility_date = "2024-12-01"
+
+[vars]
+# URL ngrok corrente - aggiorna con: wrangler secret put NGROK_URL
+# oppure cambia qui e fai wrangler deploy
+NGROK_URL = "https://unenvironed-unguligrade-tyree.ngrok-free.dev"
+
+# Secrets (set via wrangler secret put):
+# SLACK_BOT_TOKEN
